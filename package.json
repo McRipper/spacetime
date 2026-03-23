@@ -1,5 +1,5 @@
 {
-  "name": "spacetime",
+	"name": "spacetime",
 	"displayName": "Spacetime - Automatic Workspace Time Tracking",
 	"publisher": "NewMeta",
 	"repository": {
@@ -7,16 +7,13 @@
 		"url": "https://github.com/JoelBesada/spacetime"
 	},
 	"icon": "assets/Logo.png",
-	"description": "Automatically track time spent in each VSCode workspace.",
-	"version": "1.0.0",
+	"description": "Automatically track time spent in each VSCode workspace, with Copilot usage tracking.",
+	"version": "2.0.0",
 	"engines": {
-		"vscode": "^1.55.0"
+		"vscode": "^1.85.0"
 	},
 	"categories": [
 		"Other"
-	],
-	"activationEvents": [
-		"onStartupFinished"
 	],
 	"license": "ISC",
 	"main": "./out/extension.js",
@@ -32,31 +29,29 @@
 			"properties": {
 				"spacetime.maxIdleMinutes": {
 					"type": "number",
-					"default": 15,
-					"description": "Spacetime tracks work activity by looking at time elapsed between file save events within each workspace. This setting defines the maximum number of minutes that spacetime considers as active work time prior to a new save event occuring."
+					"default": 5,
+					"description": "Maximum minutes of inactivity before Spacetime stops counting time. Activity is detected via edits, cursor moves, and saves."
 				}
 			}
-    }
+		}
 	},
 	"scripts": {
-		"vscode:prepublish": "yarn run compile",
+		"vscode:prepublish": "npm run compile",
 		"compile": "tsc -p ./",
 		"watch": "tsc -watch -p ./",
-		"pretest": "yarn run compile && yarn run lint",
-		"lint": "eslint src --ext ts",
+		"pretest": "npm run compile && npm run lint",
+		"lint": "eslint src",
 		"test": "node ./out/test/runTest.js"
 	},
 	"devDependencies": {
-		"@types/vscode": "^1.55.0",
-		"@types/glob": "^7.1.3",
-		"@types/mocha": "^8.0.4",
-		"@types/node": "^12.11.7",
-		"eslint": "^7.19.0",
-		"@typescript-eslint/eslint-plugin": "^4.14.1",
-		"@typescript-eslint/parser": "^4.14.1",
-		"glob": "^7.1.6",
-		"mocha": "^8.2.1",
-		"typescript": "^4.1.3",
-		"vscode-test": "^1.5.0"
+		"@types/mocha": "^10.0.10",
+		"@types/node": "^18.0.0",
+		"@types/vscode": "^1.75.0",
+		"@vscode/test-electron": "^2.5.2",
+		"eslint": "^9.39.4",
+		"glob": "^13.0.6",
+		"mocha": "^11.7.5",
+		"typescript": "^5.3.0",
+		"typescript-eslint": "^8.57.2"
 	}
 }
