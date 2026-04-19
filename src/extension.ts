@@ -28,8 +28,15 @@ let lastEditTimestamp = 0;
 let activeWorkspaceName: string | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
+function formatLocalDate(date: Date): string {
+	const y = date.getFullYear();
+	const m = String(date.getMonth() + 1).padStart(2, '0');
+	const d = String(date.getDate()).padStart(2, '0');
+	return `${y}-${m}-${d}`;
+}
+
 function getToday(): string {
-	return new Date().toISOString().split('T')[0];
+	return formatLocalDate(new Date());
 }
 
 function getNonce(): string {
@@ -76,20 +83,32 @@ export function activate(context: vscode.ExtensionContext) {
 	statusBarItem.command = 'spacetime.viewStats';
 	context.subscriptions.push(statusBarItem);
 
-	const updateActiveWorkspace = () => {
+	const updateActiveWorkspace = (): boolean => {
+		const previous = activeWorkspaceName;
 		const editor = vscode.window.activeTextEditor;
 		if (editor && editor.document.uri.scheme === 'file') {
 			const folder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
 			if (folder) {
 				activeWorkspaceName = folder.name;
+				return previous !== activeWorkspaceName;
 			}
 		}
+		if (!activeWorkspaceName) {
+			const folders = vscode.workspace.workspaceFolders;
+			if (folders && folders.length > 0) {
+				activeWorkspaceName = folders[0].name;
+				return previous !== activeWorkspaceName;
+			}
+		}
+		return false;
 	};
 	updateActiveWorkspace();
 
 	const recordActivity = () => {
 		lastActivityTimestamp = Date.now();
-		updateActiveWorkspace();
+		if (updateActiveWorkspace()) {
+			updateStatusBar(context.globalState.get<WorkspaceTimes>(STORAGE_KEY, {}));
+		}
 	};
 
 	const recordEdit = () => {
@@ -119,15 +138,20 @@ export function activate(context: vscode.ExtensionContext) {
 		statusBarItem.show();
 	};
 
-	// Heartbeat timer: accumulates time every 30s if user was recently active
-	heartbeatTimer = setInterval(() => {
-		if (!activeWorkspaceName) {
-			return;
-		}
-		if (Date.now() - lastActivityTimestamp > getMaxIdleMs()) {
-			return;
-		}
+	let lastTickTimestamp = Date.now();
 
+	const tick = async (now: number = Date.now()): Promise<void> => {
+		const elapsedMs = now - lastTickTimestamp;
+		lastTickTimestamp = now;
+		if (!activeWorkspaceName) { return; }
+		if (elapsedMs <= 0) { return; }
+		const maxIdle = getMaxIdleMs();
+		if (now - lastActivityTimestamp > maxIdle) { return; }
+
+		// Cap elapsed time to the heartbeat interval to avoid runaway accumulation
+		// (e.g. after system sleep).
+		const cappedMs = Math.min(elapsedMs, HEARTBEAT_INTERVAL_MS);
+		const seconds = cappedMs / 1000;
 		const date = getToday();
 		const workspaceTimes = context.globalState.get<WorkspaceTimes>(STORAGE_KEY, {});
 		if (!workspaceTimes[activeWorkspaceName]) {
@@ -136,17 +160,27 @@ export function activate(context: vscode.ExtensionContext) {
 		if (!workspaceTimes[activeWorkspaceName][date]) {
 			workspaceTimes[activeWorkspaceName][date] = { total: 0, editing: 0 };
 		}
-
-		const seconds = HEARTBEAT_INTERVAL_MS / 1000;
 		workspaceTimes[activeWorkspaceName][date].total += seconds;
-
-		if (Date.now() - lastEditTimestamp <= getMaxIdleMs()) {
+		if (now - lastEditTimestamp <= maxIdle) {
 			workspaceTimes[activeWorkspaceName][date].editing += seconds;
 		}
-
-		context.globalState.update(STORAGE_KEY, workspaceTimes);
+		await context.globalState.update(STORAGE_KEY, workspaceTimes);
 		updateStatusBar(workspaceTimes);
-	}, HEARTBEAT_INTERVAL_MS);
+	};
+
+	// Heartbeat timer: accumulates time every 30s if user was recently active
+	heartbeatTimer = setInterval(() => { void tick(); }, HEARTBEAT_INTERVAL_MS);
+
+	context.subscriptions.push({
+		dispose: () => {
+			if (heartbeatTimer) {
+				clearInterval(heartbeatTimer);
+				heartbeatTimer = undefined;
+			}
+			// Final flush of any time accrued since the last tick.
+			void tick();
+		}
+	});
 
 	// Activity event listeners
 	context.subscriptions.push(
@@ -166,36 +200,43 @@ export function activate(context: vscode.ExtensionContext) {
 			'spacetime-stats',
 			'Spacetime Stats',
 			vscode.ViewColumn.One,
-			{ enableScripts: true }
+			{
+				enableScripts: true,
+				localResourceRoots: [
+					vscode.Uri.joinPath(context.extensionUri, 'assets'),
+					vscode.Uri.joinPath(context.extensionUri, 'media'),
+				],
+			}
 		);
 
 		const nonce = getNonce();
 		const dayMs = 86_400_000;
 		const today = getToday();
-		const sevenDaysAgo = new Date(Date.now() - dayMs * 7).toISOString().split('T')[0];
+		const sevenDaysAgo = formatLocalDate(new Date(Date.now() - dayMs * 7));
 		const logoURI = panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(context.extensionUri, 'assets', 'Logo.png')
+		);
+		const chartJsURI = panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(context.extensionUri, 'media', 'chart.umd.js')
 		);
 		const workspaceTimes = context.globalState.get<WorkspaceTimes>(STORAGE_KEY, {});
 		const dataJson = JSON.stringify(workspaceTimes).replace(/<\//g, '<\\/');
 
-		panel.webview.html = getWebviewHtml(nonce, panel, logoURI, sevenDaysAgo, today, dataJson);
+		panel.webview.html = getWebviewHtml(nonce, panel, logoURI, chartJsURI, sevenDaysAgo, today, dataJson);
 	});
 
 	context.subscriptions.push(disposable);
 }
 
 export function deactivate() {
-	if (heartbeatTimer) {
-		clearInterval(heartbeatTimer);
-		heartbeatTimer = undefined;
-	}
+	// Cleanup is handled via context.subscriptions disposables.
 }
 
 function getWebviewHtml(
 	nonce: string,
 	panel: vscode.WebviewPanel,
 	logoURI: vscode.Uri,
+	chartJsURI: vscode.Uri,
 	sevenDaysAgo: string,
 	today: string,
 	dataJson: string
@@ -205,7 +246,7 @@ function getWebviewHtml(
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${panel.webview.cspSource}; script-src 'nonce-${nonce}' https://cdn.jsdelivr.net; style-src 'unsafe-inline';">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${panel.webview.cspSource}; script-src 'nonce-${nonce}' ${panel.webview.cspSource}; style-src 'unsafe-inline';">
 	<title>Spacetime Stats</title>
 	<style>
 		h1 { font-size: 2.5em; }
@@ -318,14 +359,29 @@ function getWebviewHtml(
 		</table>
 	</section>
 
-	<script nonce="${nonce}" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+	<script nonce="${nonce}" src="${chartJsURI}"></script>
 	<script nonce="${nonce}">
 		window.workspaceTimes = ${dataJson}
 	</script>
 	<script nonce="${nonce}">
-		${inlinedScript.toString().split('\n').slice(1, -1).join('\n')}
+		${extractFunctionBody(inlinedScript)}
 	</script>
 </body>
 </html>`;
+}
+
+/**
+ * Extracts the body of a single-expression arrow/function by slicing
+ * between the first `{` and the last `}` in its source. Robust to
+ * differences in TS emit formatting (unlike splitting on newlines).
+ */
+function extractFunctionBody(fn: (...args: unknown[]) => unknown): string {
+	const src = fn.toString();
+	const start = src.indexOf('{');
+	const end = src.lastIndexOf('}');
+	if (start === -1 || end === -1 || end <= start) {
+		throw new Error('Spacetime: failed to extract inlined script body');
+	}
+	return src.slice(start + 1, end);
 }
 

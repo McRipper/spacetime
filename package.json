@@ -37,8 +37,9 @@
 	},
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
-		"compile": "tsc -p ./",
-		"watch": "tsc -watch -p ./",
+		"copy-assets": "node -e \"require('fs').mkdirSync('media',{recursive:true});require('fs').copyFileSync('node_modules/chart.js/dist/chart.umd.js','media/chart.umd.js')\"",
+		"compile": "npm run copy-assets && tsc -p ./",
+		"watch": "npm run copy-assets && tsc -watch -p ./",
 		"pretest": "npm run compile && npm run lint",
 		"lint": "eslint src",
 		"test": "node ./out/test/runTest.js"
@@ -48,6 +49,7 @@
 		"@types/node": "^18.0.0",
 		"@types/vscode": "^1.75.0",
 		"@vscode/test-electron": "^2.5.2",
+		"chart.js": "^4.4.0",
 		"eslint": "^9.39.4",
 		"glob": "^13.0.6",
 		"mocha": "^11.7.5",
